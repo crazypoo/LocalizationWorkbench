@@ -3,6 +3,34 @@ import AppKit
 import SwiftUI
 import LocalizationCore
 
+/// A cell owns its text changes, preventing the entire workspace from being
+/// invalidated on every keystroke (especially expensive while scrolling).
+@MainActor
+fileprivate final class TranslationCellDraft: ObservableObject {
+    let original: String
+    @Published var text: String {
+        didSet {
+            guard text != oldValue else { return }
+            onChange?(text)
+        }
+    }
+    var onChange: (@MainActor (String) -> Void)?
+
+    init(original: String) {
+        self.original = original
+        self.text = original
+    }
+    var isDirty: Bool { text != original }
+}
+
+private enum MatrixMetrics {
+    static let keyWidth: CGFloat = 230
+    static let languageWidth: CGFloat = 265
+    static let separatorWidth: CGFloat = 1
+    static let rowHeight: CGFloat = 82
+    static let headerHeight: CGFloat = 43
+}
+
 @MainActor
 final class WorkbenchStore: ObservableObject {
     @Published var snapshot: WorkspaceSnapshot?
@@ -10,7 +38,16 @@ final class WorkbenchStore: ObservableObject {
     @Published var selectedRowID: String?
     @Published var search = ""
     @Published var filter: Filter = .all
-    @Published var drafts: [String: String] = [:]
+    // Only a change in *dirty cell count* needs to update the toolbar. Individual
+    // text keystrokes publish through TranslationCellDraft, not WorkbenchStore.
+    @Published private(set) var dirtyDraftCount = 0
+    private var drafts: [String: String] = [:]
+    private var cellDrafts: [String: TranslationCellDraft] = [:]
+    private var groupLanguages: [String: [String]] = [:]
+    private var groupCompletion: [String: Double] = [:]
+    private var groupedRows: [String: [TranslationRow]] = [:]
+    private var problemIDs: Set<String> = []
+    private var cachedGroups: [String] = []
     @Published var staged: [WorkspaceEdit] = []
     @Published var redoStack: [WorkspaceEdit] = []
     @Published var changes: WorkspaceChangeSet?
@@ -40,63 +77,95 @@ final class WorkbenchStore: ObservableObject {
         var id: String { rawValue }
     }
 
-    var groups: [String] { Array(Set(snapshot?.documents.map(\.group) ?? [])).sorted() }
+    var groups: [String] { cachedGroups }
     var selectedRow: TranslationRow? { snapshot?.rows.first { $0.id == selectedRowID } }
     var rootName: String { snapshot?.root.lastPathComponent ?? "No project" }
 
-    func langs(_ group: String?) -> [String] {
-        guard let snap = snapshot else { return [] }
-        guard let group else { return snap.languages }
-        var found = Set(snap.documents.filter { $0.group == group }.compactMap(\.language))
-        for row in snap.rows where row.group == group { found.formUnion(row.values.keys) }
-        if found.isEmpty, let doc = snap.documents.first(where: { $0.group == group && $0.format == .xcstrings }),
-           let bytes = try? Data(contentsOf: doc.url),
-           let dict = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
-           let source = dict["sourceLanguage"] as? String { found.insert(source) }
-        return found.sorted()
+    /// Called once per workspace load, not from each scrolling cell.
+    private func rebuildIndex(_ snap: WorkspaceSnapshot) {
+        cachedGroups = Array(Set(snap.documents.map(\.group))).sorted()
+        groupedRows = Dictionary(grouping: snap.rows, by: \.group)
+        var languages: [String: Set<String>] = [:]
+        for doc in snap.documents {
+            if let lang = doc.language { languages[doc.group, default: []].insert(lang) }
+        }
+        for row in snap.rows { languages[row.group, default: []].formUnion(row.values.keys) }
+        // A catalog with no rows still has a source language. Read at most once.
+        for doc in snap.documents where doc.format == .xcstrings && (languages[doc.group]?.isEmpty ?? true) {
+            if let data = snap.baselineFiles[doc.url.path],
+               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let source = object["sourceLanguage"] as? String {
+                languages[doc.group, default: []].insert(source)
+            }
+        }
+        groupLanguages = languages.mapValues { $0.sorted() }
+        groupCompletion = [:]
+        for (group, rows) in groupedRows {
+            let available = groupLanguages[group] ?? []
+            let total = rows.count * available.count
+            if total == 0 { groupCompletion[group] = 0; continue }
+            let count = rows.reduce(into: 0) { tally, row in
+                for lang in available where !(row.values[lang] ?? "").isEmpty { tally += 1 }
+            }
+            groupCompletion[group] = Double(count) / Double(total)
+        }
+        let issueDetails = Dictionary(grouping: snap.issues, by: \.file).mapValues { $0.map(\.detail) }
+        problemIDs = Set(snap.rows.lazy.filter { row in
+            (issueDetails[row.group] ?? []).contains { $0.contains(row.key) }
+        }.map(\.id))
     }
 
+    func langs(_ group: String?) -> [String] {
+        group.flatMap { groupLanguages[$0] } ?? snapshot?.languages ?? []
+    }
     func isMissing(_ row: TranslationRow) -> Bool {
         langs(row.group).contains { (row.values[$0] ?? "").isEmpty }
     }
-    func isProblem(_ row: TranslationRow) -> Bool {
-        (snapshot?.issues ?? []).contains { $0.file == row.group && $0.detail.contains(row.key) }
-    }
+    func isProblem(_ row: TranslationRow) -> Bool { problemIDs.contains(row.id) }
     func isChanged(_ row: TranslationRow) -> Bool {
         langs(row.group).contains { getDraft(row, $0) != (row.values[$0] ?? "") } ||
         staged.contains { $0.summary.contains(row.key) }
     }
     var rows: [TranslationRow] {
         guard let snap = snapshot else { return [] }
-        return snap.rows.filter { row in
-            (selectedGroup == nil || selectedGroup == row.group) &&
-            (search.isEmpty || row.key.localizedCaseInsensitiveContains(search) || row.variant.localizedCaseInsensitiveContains(search) || row.values.values.contains { $0.localizedCaseInsensitiveContains(search) }) &&
-            (filter == .all || filter == .missing && isMissing(row) || filter == .changed && isChanged(row) || filter == .issues && isProblem(row))
+        let candidates = selectedGroup.flatMap { groupedRows[$0] } ?? snap.rows
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if term.isEmpty && filter == .all { return candidates }
+        return candidates.filter { row in
+            (term.isEmpty || row.key.localizedCaseInsensitiveContains(term) ||
+             row.variant.localizedCaseInsensitiveContains(term) ||
+             row.values.values.contains { $0.localizedCaseInsensitiveContains(term) }) &&
+            (filter == .all || filter == .missing && isMissing(row) ||
+             filter == .changed && isChanged(row) || filter == .issues && isProblem(row))
         }
     }
-    func completion(_ group: String) -> Double {
-        guard let snap = snapshot else { return 0 }
-        let r = snap.rows.filter { $0.group == group }
-        let target = langs(group)
-        let all = r.count * target.count
-        guard all > 0 else { return 0 }
-        let present = r.reduce(0) { total, row in total + target.filter { !(row.values[$0] ?? "").isEmpty }.count }
-        return Double(present) / Double(all)
-    }
+    func completion(_ group: String) -> Double { groupCompletion[group] ?? 0 }
     func fileIcon(_ group: String) -> String {
         if group.hasSuffix("xcstrings") { return "curlybraces.square" }
         if group.hasSuffix("stringsdict") { return "text.badge.star" }
         return "doc.plaintext"
     }
     func cacheKey(_ row: TranslationRow, _ lang: String) -> String { row.id + "||" + lang }
-    func getDraft(_ row: TranslationRow, _ lang: String) -> String { drafts[cacheKey(row, lang)] ?? row.values[lang] ?? "" }
-    func setDraft(_ row: TranslationRow, _ lang: String, value: String) { drafts[cacheKey(row, lang)] = value }
-    var unsavedDraftCount: Int {
-        guard let snap = snapshot else { return 0 }
-        return snap.rows.reduce(0) { count, row in
-            count + langs(row.group).filter { getDraft(row, $0) != (row.values[$0] ?? "") }.count
-        }
+    func getDraft(_ row: TranslationRow, _ lang: String) -> String {
+        drafts[cacheKey(row, lang)] ?? row.values[lang] ?? ""
     }
+    fileprivate func cellDraft(for row: TranslationRow, language: String) -> TranslationCellDraft {
+        let key = cacheKey(row, language)
+        if let existing = cellDrafts[key] { return existing }
+        let original = row.values[language] ?? ""
+        let cell = TranslationCellDraft(original: original)
+        cell.onChange = { [weak self] text in
+            guard let self else { return }
+            let previouslyDirty = self.drafts[key] != nil
+            if text == original { self.drafts.removeValue(forKey: key) }
+            else { self.drafts[key] = text }
+            let nowDirty = text != original
+            if previouslyDirty != nowDirty { self.dirtyDraftCount = self.drafts.count }
+        }
+        cellDrafts[key] = cell
+        return cell
+    }
+    var unsavedDraftCount: Int { dirtyDraftCount }
 
     func open() {
         let panel = NSOpenPanel()
@@ -115,10 +184,13 @@ final class WorkbenchStore: ObservableObject {
                 let newSnapshot = try await Task.detached(priority: .userInitiated) {
                     try WorkspaceLoader.load(at: url)
                 }.value
+                rebuildIndex(newSnapshot)
+                cellDrafts.removeAll()
+                drafts.removeAll()
+                dirtyDraftCount = 0
                 snapshot = newSnapshot
                 selectedGroup = selected.flatMap { g in newSnapshot.documents.contains { $0.group == g } ? g : nil }
                 selectedRowID = nil
-                drafts = [:]
                 staged = []
                 redoStack = []
                 changes = nil
@@ -174,7 +246,10 @@ final class WorkbenchStore: ObservableObject {
         staged.append(last)
     }
     func discard() {
-        drafts = [:]; staged = []; redoStack = []; changes = nil
+        for cell in cellDrafts.values where cell.isDirty { cell.text = cell.original }
+        drafts.removeAll()
+        dirtyDraftCount = 0
+        staged = []; redoStack = []; changes = nil
     }
     func addKey() {
         guard let group = selectedGroup, !inputKey.isEmpty else { return }
