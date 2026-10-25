@@ -1,0 +1,60 @@
+Test Suite 'All tests' started at 2026-10-25 04:02:14.531
+Test Suite 'debug.xctest' started at 2026-10-25 04:02:14.532
+Test Suite 'LocalizationCoreTests' started at 2026-10-25 04:02:14.532
+Test Case 'LocalizationCoreTests.testCatalogChangeLeavesUnknownMetadataUntouched' started at 2026-10-25 04:02:14.532
+Test Case 'LocalizationCoreTests.testCatalogChangeLeavesUnknownMetadataUntouched' passed (0.001 seconds)
+Test Case 'LocalizationCoreTests.testCatalogQuotedKeysAndPluralVariants' started at 2026-10-25 04:02:14.534
+Test Case 'LocalizationCoreTests.testCatalogQuotedKeysAndPluralVariants' passed (0.101 seconds)
+Test Case 'LocalizationCoreTests.testConcurrentSaveConflict' started at 2026-10-25 04:02:14.635
+Test Case 'LocalizationCoreTests.testConcurrentSaveConflict' passed (0.003 seconds)
+Test Case 'LocalizationCoreTests.testDuplicatesAreRejectedOnWrite' started at 2026-10-25 04:02:14.637
+Test Case 'LocalizationCoreTests.testDuplicatesAreRejectedOnWrite' passed (0.0 seconds)
+Test Case 'LocalizationCoreTests.testNoOutsideWorkspaceSave' started at 2026-10-25 04:02:14.638
+Test Case 'LocalizationCoreTests.testNoOutsideWorkspaceSave' passed (0.0 seconds)
+Test Case 'LocalizationCoreTests.testSampleWorkspaceDiscoversAllThreeFormats' started at 2026-10-25 04:02:14.638
+Test Case 'LocalizationCoreTests.testSampleWorkspaceDiscoversAllThreeFormats' passed (0.105 seconds)
+Test Case 'LocalizationCoreTests.testStringsDictPreviewRoundTrip' started at 2026-10-25 04:02:14.743
+Test Case 'LocalizationCoreTests.testStringsDictPreviewRoundTrip' passed (0.004 seconds)
+Test Case 'LocalizationCoreTests.testStringsParsingAndSurgicalWritePreservesAllOtherBytes' started at 2026-10-25 04:02:14.747
+Test Case 'LocalizationCoreTests.testStringsParsingAndSurgicalWritePreservesAllOtherBytes' passed (0.0 seconds)
+Test Suite 'LocalizationCoreTests' passed at 2026-10-25 04:02:14.747
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.214 (0.214) seconds
+Test Suite 'WorkspaceTransactionTests' started at 2026-10-25 04:02:14.747
+Test Case 'WorkspaceTransactionTests.testAmbiguousDuplicateIsRejectedWhenEditing' started at 2026-10-25 04:02:14.747
+Test Case 'WorkspaceTransactionTests.testAmbiguousDuplicateIsRejectedWhenEditing' passed (0.004 seconds)
+Test Case 'WorkspaceTransactionTests.testBackupManifestContainsOriginalPaths' started at 2026-10-25 04:02:14.751
+Test Case 'WorkspaceTransactionTests.testBackupManifestContainsOriginalPaths' passed (0.005 seconds)
+Test Case 'WorkspaceTransactionTests.testCSVWithCommasQuotesAndEmbeddedNewlines' started at 2026-10-25 04:02:14.756
+Test Case 'WorkspaceTransactionTests.testCSVWithCommasQuotesAndEmbeddedNewlines' passed (0.002 seconds)
+Test Case 'WorkspaceTransactionTests.testCatalogAddKeyAddLanguageAndComment' started at 2026-10-25 04:02:14.758
+Test Case 'WorkspaceTransactionTests.testCatalogAddKeyAddLanguageAndComment' passed (0.005 seconds)
+Test Case 'WorkspaceTransactionTests.testCatalogTargetedValueStateAndPlural' started at 2026-10-25 04:02:14.763
+Test Case 'WorkspaceTransactionTests.testCatalogTargetedValueStateAndPlural' passed (0.007 seconds)
+Test Case 'WorkspaceTransactionTests.testExternalEditAfterReviewIsRejected' started at 2026-10-25 04:02:14.770
+Test Case 'WorkspaceTransactionTests.testExternalEditAfterReviewIsRejected' passed (0.002 seconds)
+Test Case 'WorkspaceTransactionTests.testExternalEditBeforeReviewIsRejected' started at 2026-10-25 04:02:14.773
+Test Case 'WorkspaceTransactionTests.testExternalEditBeforeReviewIsRejected' passed (0.002 seconds)
+Test Case 'WorkspaceTransactionTests.testJSONDuplicateKeysRejected' started at 2026-10-25 04:02:14.775
+Test Case 'WorkspaceTransactionTests.testJSONDuplicateKeysRejected' passed (0.0 seconds)
+Test Case 'WorkspaceTransactionTests.testNewLocaleAndNewKeyAndCSV' started at 2026-10-25 04:02:14.775
+Test Case 'WorkspaceTransactionTests.testNewLocaleAndNewKeyAndCSV' passed (0.007 seconds)
+Test Case 'WorkspaceTransactionTests.testPluralsRequireOther' started at 2026-10-25 04:02:14.783
+Test Case 'WorkspaceTransactionTests.testPluralsRequireOther' passed (0.001 seconds)
+Test Case 'WorkspaceTransactionTests.testRenameAndDeleteAcrossLocales' started at 2026-10-25 04:02:14.784
+Test Case 'WorkspaceTransactionTests.testRenameAndDeleteAcrossLocales' passed (0.005 seconds)
+Test Case 'WorkspaceTransactionTests.testStagedMultiFileEditsAndBackups' started at 2026-10-25 04:02:14.789
+Test Case 'WorkspaceTransactionTests.testStagedMultiFileEditsAndBackups' passed (0.005 seconds)
+Test Case 'WorkspaceTransactionTests.testStringsDictAddPluralAndNewLanguage' started at 2026-10-25 04:02:14.794
+Test Case 'WorkspaceTransactionTests.testStringsDictAddPluralAndNewLanguage' passed (0.005 seconds)
+Test Case 'WorkspaceTransactionTests.testStringsDictPluralEditing' started at 2026-10-25 04:02:14.800
+Test Case 'WorkspaceTransactionTests.testStringsDictPluralEditing' passed (0.004 seconds)
+Test Suite 'WorkspaceTransactionTests' passed at 2026-10-25 04:02:14.804
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.057 (0.057) seconds
+Test Suite 'debug.xctest' passed at 2026-10-25 04:02:14.804
+	 Executed 22 tests, with 0 failures (0 unexpected) in 0.271 (0.271) seconds
+Test Suite 'All tests' passed at 2026-10-25 04:02:14.804
+	 Executed 22 tests, with 0 failures (0 unexpected) in 0.271 (0.271) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.2.1 (c9d57c83568b06d)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

@@ -1,0 +1,4 @@
+/* Greeting shown on homepage */
+"hello" = "Hello";
+"cart.count" = "You have %d items";
+"button.save" = "Save";
