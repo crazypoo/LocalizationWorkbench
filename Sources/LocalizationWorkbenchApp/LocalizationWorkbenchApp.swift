@@ -519,22 +519,28 @@ private struct WorkbenchWindow: View {
     }
 
     private var translationMatrix: some View {
-        VStack(spacing: 0) {
+        // Resolve these once per matrix update, not inside each row/cell.
+        let visibleRows = store.rows
+        let languages = store.langs(store.selectedGroup)
+        return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search keys, values or variants", text: $store.search)
                     .textFieldStyle(.plain)
                     .font(.callout)
-                if !store.search.isEmpty { Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary) }
+                if !store.search.isEmpty {
+                    Button { store.search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
                 Picker("Filter", selection: $store.filter) {
                     ForEach(WorkbenchStore.Filter.allCases) { f in Text(f.rawValue).tag(f) }
                 }
                 .pickerStyle(.menu).labelsHidden().frame(width: 110)
-                Text("\(store.rows.count) rows").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text("\(visibleRows.count) rows").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             .padding(12)
             Divider()
-            if store.rows.isEmpty {
+            if visibleRows.isEmpty {
                 Spacer()
                 ContentUnavailableView("No matching translations", systemImage: "text.magnifyingglass", description: Text("Try another resource or filter"))
                 Spacer()
@@ -542,13 +548,17 @@ private struct WorkbenchWindow: View {
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         HStack(spacing: 0) {
-                            matrixHeading("KEY / VARIANT", width: 230)
-                            ForEach(store.langs(store.selectedGroup), id: \.self) { lang in
-                                matrixHeading(lang.uppercased(), width: 265)
+                            matrixHeading("KEY / VARIANT", width: MatrixMetrics.keyWidth)
+                            matrixSeparator
+                            ForEach(languages, id: \.self) { lang in
+                                matrixHeading(lang.uppercased(), width: MatrixMetrics.languageWidth)
+                                matrixSeparator
                             }
                         }
                         .background(Color(nsColor: .controlBackgroundColor))
-                        ForEach(Array(store.rows.enumerated()), id: \.element.id) { index, row in
+                        // The row's identity is the domain ID. Enumerating an array on
+                        // every redraw used to allocate unnecessarily during typing.
+                        ForEach(visibleRows) { row in
                             HStack(alignment: .top, spacing: 0) {
                                 Button {
                                     store.selectedRowID = row.id
@@ -574,8 +584,7 @@ private struct WorkbenchWindow: View {
                                         }
                                     }
                                     .padding(10)
-                                    .frame(width: 230, alignment: .leading)
-                                    .frame(minHeight: 64, alignment: .topLeading)
+                                    .frame(width: MatrixMetrics.keyWidth, height: MatrixMetrics.rowHeight, alignment: .topLeading)
                                     .background(store.selectedRowID == row.id ? Color.accentColor.opacity(0.17) : .clear)
                                     .contentShape(Rectangle())
                                 }
@@ -592,7 +601,7 @@ private struct WorkbenchWindow: View {
                                     }
                                     Button("Add Variant…") {
                                         store.selectedRowID = row.id
-                                        store.inputLanguage = store.langs(row.group).first ?? "en"
+                                        store.inputLanguage = languages.first ?? "en"
                                         store.showVariantSheet = true
                                     }
                                     Divider()
@@ -601,14 +610,18 @@ private struct WorkbenchWindow: View {
                                         store.showDeleteConfirmation = true
                                     }
                                 }
-                                Rectangle().fill(Color.secondary.opacity(0.12)).frame(width: 1)
-                                ForEach(store.langs(store.selectedGroup), id: \.self) { lang in
-                                    matrixCell(row: row, lang: lang)
-                                    Rectangle().fill(Color.secondary.opacity(0.12)).frame(width: 1)
+                                matrixSeparator
+                                ForEach(languages, id: \.self) { lang in
+                                    MatrixTranslationCell(row: row, language: lang,
+                                                          draft: store.cellDraft(for: row, language: lang))
+                                    matrixSeparator
                                 }
                             }
-                            .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.028))
-                            Divider().opacity(0.6)
+                            .frame(height: MatrixMetrics.rowHeight)
+                            .background(Color(nsColor: .textBackgroundColor).opacity(0.12))
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(Color.secondary.opacity(0.10)).frame(height: 0.5)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -617,45 +630,19 @@ private struct WorkbenchWindow: View {
         }
     }
 
+    private var matrixSeparator: some View {
+        Rectangle().fill(Color.secondary.opacity(0.12))
+            .frame(width: MatrixMetrics.separatorWidth)
+    }
     private func matrixHeading(_ value: String, width: CGFloat) -> some View {
         Text(value)
             .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.secondary)
             .tracking(0.4)
-            .frame(width: width, alignment: .leading)
-            .padding(.horizontal, 10).padding(.vertical, 13)
-            .border(Color.secondary.opacity(0.1), width: 0.5)
-    }
-    private func matrixCell(row: TranslationRow, lang: String) -> some View {
-        let value = row.values[lang]
-        let dirty = store.getDraft(row, lang) != (value ?? "")
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                if value == nil || value == "" {
-                    Image(systemName: "circle.dotted").foregroundStyle(.orange)
-                    Text("Missing").font(.system(size: 9)).foregroundStyle(.orange)
-                } else if dirty {
-                    Image(systemName: "pencil.circle.fill").foregroundStyle(.mint)
-                    Text("Edited").font(.system(size: 9)).foregroundStyle(.mint)
-                } else {
-                    Image(systemName: "checkmark.circle").foregroundStyle(.green)
-                    Text("Translated").font(.system(size: 9)).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            TextField("Enter translation", text: Binding(
-                get: { store.getDraft(row, lang) },
-                set: { store.setDraft(row, lang, value: $0) }
-            ), axis: .vertical)
-            .textFieldStyle(.plain)
-            .lineLimit(2...5)
-            .font(.system(size: 12))
-            .accessibilityLabel("\(row.key), \(lang)")
-        }
-        .padding(9)
-        .frame(width: 265, alignment: .leading)
-        .frame(minHeight: 64, alignment: .topLeading)
-        .background(dirty ? Color.accentColor.opacity(0.07) : .clear)
+            // Padding is INSIDE the fixed-width frame. It used to add 20pt
+            // on top of width, which desynchronized every subsequent column.
+            .padding(.horizontal, 10)
+            .frame(width: width, height: MatrixMetrics.headerHeight, alignment: .leading)
     }
 
     private var inspector: some View {
@@ -682,13 +669,7 @@ private struct WorkbenchWindow: View {
                                     Spacer()
                                     if (row.values[lang] ?? "").isEmpty { Text("Missing").font(.caption2).foregroundStyle(.orange) }
                                 }
-                                TextEditor(text: Binding(
-                                    get: { store.getDraft(row, lang) },
-                                    set: { store.setDraft(row, lang, value: $0) }
-                                ))
-                                .font(.system(.body, design: .monospaced))
-                                .frame(height: 83)
-                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15)))
+                                InspectorTranslationEditor(draft: store.cellDraft(for: row, language: lang))
                             }
                         }
                     }
@@ -854,6 +835,51 @@ private struct WorkbenchWindow: View {
     }
     private var changeReview: some View {
         ChangeReviewSheet(store: store)
+    }
+}
+
+/// The matrix cell observes only its own text, so editing one language does not
+/// trigger a full matrix layout and redraw. Long text stays editable in Inspector.
+private struct MatrixTranslationCell: View {
+    let row: TranslationRow
+    let language: String
+    @ObservedObject var draft: TranslationCellDraft
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                if draft.isDirty {
+                    Image(systemName: "pencil.circle.fill").foregroundStyle(.mint)
+                    Text("Edited").font(.system(size: 9)).foregroundStyle(.mint)
+                } else if draft.original.isEmpty {
+                    Image(systemName: "circle.dotted").foregroundStyle(.orange)
+                    Text("Missing").font(.system(size: 9)).foregroundStyle(.orange)
+                } else {
+                    Image(systemName: "checkmark.circle").foregroundStyle(.green)
+                    Text("Translated").font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            TextField("Enter translation", text: $draft.text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(2...3)
+                .font(.system(size: 12))
+                .accessibilityLabel("\(row.key), \(language)")
+        }
+        .padding(9)
+        .frame(width: MatrixMetrics.languageWidth, height: MatrixMetrics.rowHeight, alignment: .topLeading)
+        .background(draft.isDirty ? Color.accentColor.opacity(0.07) : .clear)
+    }
+}
+
+private struct InspectorTranslationEditor: View {
+    @ObservedObject var draft: TranslationCellDraft
+
+    var body: some View {
+        TextEditor(text: $draft.text)
+            .font(.system(.body, design: .monospaced))
+            .frame(height: 83)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15)))
     }
 }
 
