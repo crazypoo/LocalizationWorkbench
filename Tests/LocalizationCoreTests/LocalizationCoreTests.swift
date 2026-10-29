@@ -3,6 +3,13 @@ import Foundation
 @testable import LocalizationCore
 
 final class LocalizationCoreTests: XCTestCase {
+    func testEscapedPrintfPercentsDoNotCountAsPlaceholders() {
+        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("Progress %%d", "Avancement %%d"))
+        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%%d", "%d"))
+        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("%%%d", "%d"))
+        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%1$@ and %%", "%2$@ and %%"))
+    }
+
     func testStringsParsingAndSurgicalWritePreservesAllOtherBytes() throws {
         let original = Data("/* comment */\r\n\"hello\" = \"Hello\";\r\n\"count\" = \"%d items\";\r\n".utf8)
         let parsed = try LegacyStrings.parse(original)
