@@ -313,7 +313,14 @@ final class WorkbenchStore: ObservableObject {
         selectedRowID = row.id
         inputLanguage = langs(row.group).first ?? "en"
         if row.group.hasSuffix(".stringsdict") {
-            inputVariant = String(row.variant.split(separator: "/").first ?? "count") + "/one"
+            // The selected row may be NSStringLocalizedFormatKey metadata;
+            // derive the plural variable from a real sibling leaf instead.
+            let sibling = snapshot?.rows.first {
+                $0.group == row.group && $0.key == row.key && $0.variant.hasSuffix("/other")
+            }
+            let leaf = sibling?.variant ?? row.variant
+            let variable = leaf.contains("/") ? String(leaf.split(separator: "/").first ?? "count") : "count"
+            inputVariant = variable + "/one"
         } else {
             inputVariant = "variations/plural/one"
         }
@@ -336,8 +343,17 @@ final class WorkbenchStore: ObservableObject {
         // Present the operations sheet only after the current sheet has dismissed.
         showOperationsWhenFormCloses = true
     }
-    private func keyExistsOrIsStaged(group: String, key: String, excluding oldKey: String? = nil) -> Bool {
-        if snapshot?.rows.contains(where: { $0.group == group && $0.key == key && $0.key != oldKey }) == true {
+    private func effectiveKey(group: String, key original: String) -> String {
+        var key = original
+        for edit in staged {
+            if case let .renameKey(g, old, new) = edit, g == group, old == key {
+                key = new
+            }
+        }
+        return key
+    }
+    private func keyExistsOrIsStaged(group: String, key: String) -> Bool {
+        if snapshot?.rows.contains(where: { $0.group == group && $0.key == key }) == true {
             return true
         }
         return staged.contains { edit in
@@ -376,10 +392,12 @@ final class WorkbenchStore: ObservableObject {
     func undo() {
         guard let last = staged.popLast() else { return }
         redoStack.append(last)
+        stagedNotice = staged.isEmpty ? nil : "\(staged.count) operations remain staged"
     }
     func redo() {
         guard let last = redoStack.popLast() else { return }
         staged.append(last)
+        stagedNotice = "Restaged: \(last.summary)"
     }
     func discard() {
         for cell in cellDrafts.values where cell.isDirty { cell.text = cell.original }
@@ -415,7 +433,8 @@ final class WorkbenchStore: ObservableObject {
     func renameKey() {
         guard let row = selectedRow else { formError = "Select a translation row first."; return }
         let newKey = inputRename.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newKey.isEmpty, newKey != row.key else {
+        let oldKey = effectiveKey(group: row.group, key: row.key)
+        guard !newKey.isEmpty, newKey != oldKey else {
             formError = "Enter a different, non-empty key."
             return
         }
@@ -423,13 +442,13 @@ final class WorkbenchStore: ObservableObject {
             formError = "The new key already exists or is staged in this resource."
             return
         }
-        stageFromForm(.renameKey(group: row.group, old: row.key, new: newKey))
+        stageFromForm(.renameKey(group: row.group, old: oldKey, new: newKey))
         showRenameSheet = false
         inputRename = ""
     }
     func deleteKey() {
         guard let row = selectedRow else { return }
-        stage(.deleteKey(group: row.group, key: row.key))
+        stage(.deleteKey(group: row.group, key: effectiveKey(group: row.group, key: row.key)))
         showDeleteConfirmation = false
     }
     func addLanguage() {
@@ -467,7 +486,8 @@ final class WorkbenchStore: ObservableObject {
             formError = "Provide both a language and a variant path."
             return
         }
-        stageFromForm(.set(group: row.group, key: row.key, variant: variant, language: language, value: inputValue))
+        stageFromForm(.set(group: row.group, key: effectiveKey(group: row.group, key: row.key),
+                           variant: variant, language: language, value: inputValue))
         showVariantSheet = false
     }
     func addComment() {
@@ -476,7 +496,7 @@ final class WorkbenchStore: ObservableObject {
             formError = ".stringsdict comments are not supported."
             return
         }
-        stageFromForm(.comment(group: row.group, key: row.key, text: inputComment))
+        stageFromForm(.comment(group: row.group, key: effectiveKey(group: row.group, key: row.key), text: inputComment))
         showCommentSheet = false
     }
     func review() {
