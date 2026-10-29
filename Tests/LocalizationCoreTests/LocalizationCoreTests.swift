@@ -17,10 +17,10 @@ final class LocalizationCoreTests: XCTestCase {
     }
 
     func testEscapedPrintfPercentsDoNotCountAsPlaceholders() {
-        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("Progress %%d", "Avancement %%d"))
-        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%%d", "%d"))
-        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("%%%d", "%d"))
-        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%1$@ and %%", "%2$@ and %%"))
+        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("Progress %%d", target: "Avancement %%d"))
+        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%%d", target: "%d"))
+        XCTAssertTrue(WorkspaceDiagnostics.checkFormat("%%%d", target: "%d"))
+        XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%1$@ and %%", target: "%2$@ and %%"))
     }
 
     func testStringsParsingAndSurgicalWritePreservesAllOtherBytes() throws {
