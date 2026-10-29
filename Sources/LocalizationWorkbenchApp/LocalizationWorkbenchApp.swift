@@ -71,6 +71,7 @@ final class WorkbenchStore: ObservableObject {
     @Published var inputPluralType = "d"
     @Published var inputRename = ""
     @Published var inputLanguage = "fr"
+    @Published var customLanguage = ""
     @Published var inputVariant = "variations/plural/one"
     @Published var inputValue = ""
     @Published var inputComment = ""
@@ -125,7 +126,8 @@ final class WorkbenchStore: ObservableObject {
         .init(id: "nb", name: "Norwegian Bokmål"),
         .init(id: "cs", name: "Czech"),
         .init(id: "ro", name: "Romanian"),
-        .init(id: "el", name: "Greek")
+        .init(id: "el", name: "Greek"),
+        .init(id: "__custom__", name: "Other (custom BCP 47 identifier)")
     ]
 
     var selectableLanguages: [LanguageChoice] {
@@ -297,6 +299,7 @@ final class WorkbenchStore: ObservableObject {
             return
         }
         inputLanguage = first.id
+        customLanguage = ""
         formError = nil
         showAddLanguageSheet = true
     }
@@ -435,7 +438,21 @@ final class WorkbenchStore: ObservableObject {
             formError = "Choose a language not already present in this resource."
             return
         }
-        stageFromForm(.addLanguage(group: group, language: inputLanguage))
+        let language = (inputLanguage == "__custom__" ? customLanguage : inputLanguage)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard language.range(of: #"^[A-Za-z]{2,3}([_-][A-Za-z0-9]{2,8})*$"#, options: .regularExpression) != nil else {
+            formError = "Enter a valid BCP 47 identifier, such as sr-Latn or fr-CA."
+            return
+        }
+        let alreadyStaged = staged.contains { edit in
+            if case let .addLanguage(g, locale) = edit { return g == group && locale == language }
+            return false
+        }
+        guard !langs(group).contains(language), !alreadyStaged else {
+            formError = "This language already exists or is staged in the resource."
+            return
+        }
+        stageFromForm(.addLanguage(group: group, language: language))
         showAddLanguageSheet = false
     }
     func addVariant() {
@@ -988,6 +1005,9 @@ private struct WorkbenchWindow: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity, alignment: .leading)
+            if store.inputLanguage == "__custom__" {
+                TextField("BCP 47 identifier (e.g. sr-Latn)", text: $store.customLanguage)
+            }
         } action: { store.addLanguage() }
     }
     private var variantSheet: some View {
