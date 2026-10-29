@@ -92,13 +92,25 @@ public enum WorkspaceDiagnostics {
     }
 
     public static func checkFormat(_ source: String, target: String) -> Bool {
-        // Match printf token type and position; `%%` is not a placeholder.
-        let pattern = #"%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
-        func spec(_ text: String) -> [String] {
-            regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-                .compactMap { Range($0.range, in: text).map { String(text[$0]) } }.sorted()
-        }
-        return spec(source) == spec(target)
+        PrintfPlaceholders.signatures(source) == PrintfPlaceholders.signatures(target)
+    }
+}
+
+
+/// Consume escaped %% pairs before matching format specifiers. A plain regex
+/// matching %d would incorrectly flag the second percent in %%d as a token.
+enum PrintfPlaceholders {
+    private static let expression = try? NSRegularExpression(
+        pattern: #"(?:%%)|(%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp])"#
+    )
+
+    static func signatures(_ text: String) -> [String] {
+        guard let expression else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            let tokenRange = match.range(at: 1)
+            guard tokenRange.location != NSNotFound, let swiftRange = Range(tokenRange, in: text) else { return nil }
+            return String(text[swiftRange])
+        }.sorted()
     }
 }
