@@ -22,6 +22,22 @@ public enum WorkspaceEdit: Hashable, Sendable {
         case let .comment(g,k,_): return "Comment \(k) · \(g)"
         }
     }
+
+    /// Match typed fields instead of searching human-facing summaries, so a
+    /// staged edit to "cart.item" never marks "item" as modified.
+    public func affects(_ row: TranslationRow) -> Bool {
+        switch self {
+        case let .set(g, k, variant, _, _):
+            return row.group == g && row.key == k && row.variant == variant
+        case let .addKey(g, k), let .addPlural(g, k, _, _),
+             let .deleteKey(g, k), let .comment(g, k, _):
+            return row.group == g && row.key == k
+        case let .renameKey(g, old, new):
+            return row.group == g && (row.key == old || row.key == new)
+        case let .addLanguage(g, _):
+            return row.group == g
+        }
+    }
 }
 
 public struct FileDelta: Sendable, Identifiable {
@@ -51,16 +67,24 @@ public enum WorkspaceTransactions {
         var rewrite = false
     }
 
+    private static func canonicalURL(_ url: URL) -> URL {
+        // macOS temp directories can be /var/... aliases of /private/var/...
+        // Never mix unresolved LocalizedDocument URLs with canonical dictionary keys.
+        url.standardizedFileURL.resolvingSymlinksInPath()
+    }
+
     /// The builder works on a scratch copy. All modifications remain staged until commit.
     public static func preview(snapshot: WorkspaceSnapshot, edits: [WorkspaceEdit]) throws -> WorkspaceChangeSet {
-        let root = snapshot.root.standardizedFileURL
+        let root = canonicalURL(snapshot.root)
         var working: [URL: WorkingFile] = [:]
         for doc in snapshot.documents {
-            let data = try Data(contentsOf: doc.url)
+            let fileURL = canonicalURL(doc.url)
+            let data = try Data(contentsOf: fileURL)
             guard let baseline = snapshot.baselineFiles[doc.url.path], data == baseline else {
                 throw LocalizationFailure.conflict("File changed since project scan: \(doc.url.lastPathComponent). Reload before editing.")
             }
-            working[doc.url.standardizedFileURL] = WorkingFile(document: doc, original: data, data: data)
+            let normalized = LocalizedDocument(url: fileURL, format: doc.format, group: doc.group, language: doc.language)
+            working[fileURL] = WorkingFile(document: normalized, original: data, data: data)
         }
         for edit in edits {
             let group = edit.groupName
@@ -253,10 +277,10 @@ public enum WorkspaceTransactions {
     /// Two-phase consistency guard and best-effort rollback. Writes are backed up outside source folders.
     public static func commit(_ set: WorkspaceChangeSet) throws {
         let fm = FileManager.default
-        let root = set.root.standardizedFileURL.resolvingSymlinksInPath().path
+        let root = canonicalURL(set.root).path
         guard !set.files.isEmpty else { return }
         for delta in set.files {
-            let target = delta.url.standardizedFileURL.resolvingSymlinksInPath().path
+            let target = canonicalURL(delta.url).path
             guard target.hasPrefix(root + "/") else { throw LocalizationFailure.conflict("Refusing to write outside the workspace: \(target)") }
             let exists = fm.fileExists(atPath: delta.url.path)
             guard exists == (delta.original != nil) else { throw LocalizationFailure.conflict("File created or removed externally: \(target)") }
@@ -275,7 +299,8 @@ public enum WorkspaceTransactions {
             if let original = delta.original {
                 try original.write(to: backup.appendingPathComponent(name), options: .atomic)
             }
-            records.append(["relativePath": String(delta.url.path.dropFirst(set.root.path.count + 1)),
+            let canonicalPath = canonicalURL(delta.url).path
+            records.append(["relativePath": String(canonicalPath.dropFirst(root.count + 1)),
                             "backupFile": delta.original == nil ? NSNull() : name as Any,
                             "created": delta.original == nil])
         }
@@ -300,10 +325,10 @@ public enum WorkspaceTransactions {
     }
 
     private static func mutate(_ doc: LocalizedDocument, _ working: inout [URL: WorkingFile], operation: (Data) throws -> (Data, Bool)) throws {
-        guard var w = working[doc.url.standardizedFileURL] else { throw LocalizationFailure.missing("Missing file: \(doc.url.path)") }
+        guard var w = working[canonicalURL(doc.url)] else { throw LocalizationFailure.missing("Missing file: \(doc.url.path)") }
         let (next, rewrite) = try operation(w.data)
         w.data = next; w.rewrite = w.rewrite || rewrite
-        working[doc.url.standardizedFileURL] = w
+        working[canonicalURL(doc.url)] = w
     }
 
     private static func derivedDocument(template: LocalizedDocument, language: String, root: URL) throws -> LocalizedDocument {
@@ -311,8 +336,9 @@ public enum WorkspaceTransactions {
             throw LocalizationFailure.unsupported("Cannot derive a new .lproj path for \(template.url.lastPathComponent)")
         }
         let parent = template.url.deletingLastPathComponent().deletingLastPathComponent()
-        let target = parent.appendingPathComponent(language + ".lproj", isDirectory: true).appendingPathComponent(template.url.lastPathComponent).standardizedFileURL
-        guard target.path.hasPrefix(root.path + "/") else { throw LocalizationFailure.conflict("Invalid target path") }
+        let target = canonicalURL(parent.appendingPathComponent(language + ".lproj", isDirectory: true)
+            .appendingPathComponent(template.url.lastPathComponent))
+        guard target.path.hasPrefix(canonicalURL(root).path + "/") else { throw LocalizationFailure.conflict("Invalid target path") }
         return LocalizedDocument(url: target, format: template.format, group: template.group, language: language)
     }
 

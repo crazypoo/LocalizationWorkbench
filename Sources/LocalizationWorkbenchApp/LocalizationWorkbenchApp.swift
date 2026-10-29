@@ -62,12 +62,17 @@ final class WorkbenchStore: ObservableObject {
     @Published var showRenameSheet = false
     @Published var showAddLanguageSheet = false
     @Published var showDeleteConfirmation = false
+    @Published var formError: String?
+    @Published var stagedNotice: String?
+    private var showOperationsWhenFormCloses = false
+    private var reviewWhenOperationsCloses = false
 
     @Published var inputKey = ""
     @Published var inputPluralVariable = "count"
     @Published var inputPluralType = "d"
     @Published var inputRename = ""
     @Published var inputLanguage = "fr"
+    @Published var customLanguage = ""
     @Published var inputVariant = "variations/plural/one"
     @Published var inputValue = ""
     @Published var inputComment = ""
@@ -75,6 +80,65 @@ final class WorkbenchStore: ObservableObject {
     enum Filter: String, CaseIterable, Identifiable {
         case all = "All", missing = "Missing", changed = "Changed", issues = "Warnings"
         var id: String { rawValue }
+    }
+
+    struct LanguageChoice: Identifiable {
+        let id: String
+        let name: String
+    }
+
+    // Stable BCP 47 identifiers: the ID, not the localized display name, is
+    // written into the catalog or the new .lproj directory.
+    static let languageChoices: [LanguageChoice] = [
+        .init(id: "en", name: "English"),
+        .init(id: "en-GB", name: "English (UK)"),
+        .init(id: "en-AU", name: "English (Australia)"),
+        .init(id: "zh-Hans", name: "Chinese (Simplified)"),
+        .init(id: "zh-Hant", name: "Chinese (Traditional)"),
+        .init(id: "zh-HK", name: "Chinese (Hong Kong)"),
+        .init(id: "ja", name: "Japanese"),
+        .init(id: "ko", name: "Korean"),
+        .init(id: "fr", name: "French"),
+        .init(id: "fr-CA", name: "French (Canada)"),
+        .init(id: "de", name: "German"),
+        .init(id: "es", name: "Spanish"),
+        .init(id: "es-MX", name: "Spanish (Mexico)"),
+        .init(id: "pt-BR", name: "Portuguese (Brazil)"),
+        .init(id: "pt-PT", name: "Portuguese (Portugal)"),
+        .init(id: "it", name: "Italian"),
+        .init(id: "nl", name: "Dutch"),
+        .init(id: "ru", name: "Russian"),
+        .init(id: "uk", name: "Ukrainian"),
+        .init(id: "pl", name: "Polish"),
+        .init(id: "tr", name: "Turkish"),
+        .init(id: "ar", name: "Arabic"),
+        .init(id: "he", name: "Hebrew"),
+        .init(id: "hi", name: "Hindi"),
+        .init(id: "th", name: "Thai"),
+        .init(id: "vi", name: "Vietnamese"),
+        .init(id: "id", name: "Indonesian"),
+        .init(id: "ms", name: "Malay"),
+        .init(id: "km", name: "Khmer"),
+        .init(id: "my", name: "Burmese"),
+        .init(id: "fil", name: "Filipino"),
+        .init(id: "sv", name: "Swedish"),
+        .init(id: "da", name: "Danish"),
+        .init(id: "fi", name: "Finnish"),
+        .init(id: "nb", name: "Norwegian Bokmål"),
+        .init(id: "cs", name: "Czech"),
+        .init(id: "ro", name: "Romanian"),
+        .init(id: "el", name: "Greek"),
+        .init(id: "__custom__", name: "Other (custom BCP 47 identifier)")
+    ]
+
+    var selectableLanguages: [LanguageChoice] {
+        guard let group = selectedGroup else { return Self.languageChoices }
+        let stagedLanguages = staged.compactMap { edit -> String? in
+            if case let .addLanguage(editGroup, language) = edit, editGroup == group { return language }
+            return nil
+        }
+        let taken = Set(langs(group)).union(stagedLanguages)
+        return Self.languageChoices.filter { !taken.contains($0.id) }
     }
 
     var groups: [String] { cachedGroups }
@@ -124,7 +188,7 @@ final class WorkbenchStore: ObservableObject {
     func isProblem(_ row: TranslationRow) -> Bool { problemIDs.contains(row.id) }
     func isChanged(_ row: TranslationRow) -> Bool {
         langs(row.group).contains { getDraft(row, $0) != (row.values[$0] ?? "") } ||
-        staged.contains { $0.summary.contains(row.key) }
+        staged.contains { $0.affects(row) }
     }
     var rows: [TranslationRow] {
         guard let snap = snapshot else { return [] }
@@ -189,10 +253,11 @@ final class WorkbenchStore: ObservableObject {
                 drafts.removeAll()
                 dirtyDraftCount = 0
                 snapshot = newSnapshot
-                selectedGroup = selected.flatMap { g in newSnapshot.documents.contains { $0.group == g } ? g : nil }
+                selectedGroup = selected.flatMap { g in newSnapshot.documents.contains { $0.group == g } ? g : nil } ?? cachedGroups.first
                 selectedRowID = nil
                 staged = []
                 redoStack = []
+                stagedNotice = nil
                 changes = nil
                 UserDefaults.standard.set(url.path, forKey: "LastProjectPath")
             } catch { message = error.localizedDescription }
@@ -214,6 +279,104 @@ final class WorkbenchStore: ObservableObject {
         }
         staged.append(edit)
         redoStack.removeAll()
+        stagedNotice = "Staged: \(edit.summary)"
+    }
+    func removeStaged(at index: Int) {
+        guard staged.indices.contains(index) else { return }
+        staged.remove(at: index)
+        // Removing an arbitrary operation invalidates the redo history.
+        redoStack.removeAll()
+        stagedNotice = staged.isEmpty ? nil : "\(staged.count) operations remain staged"
+    }
+    func prepareAddKey() {
+        guard selectedGroup != nil else { message = "Select a resource in the sidebar first."; return }
+        inputKey = ""
+        formError = nil
+        showAddKeySheet = true
+    }
+    func prepareAddLanguage() {
+        guard selectedGroup != nil else { message = "Select a resource in the sidebar first."; return }
+        guard let first = selectableLanguages.first else {
+            message = "All languages in the picker already exist in this resource."
+            return
+        }
+        inputLanguage = first.id
+        customLanguage = ""
+        formError = nil
+        showAddLanguageSheet = true
+    }
+    func prepareRename(_ row: TranslationRow) {
+        selectedRowID = row.id
+        inputRename = row.key
+        formError = nil
+        showRenameSheet = true
+    }
+    func prepareVariant(_ row: TranslationRow) {
+        selectedRowID = row.id
+        inputLanguage = langs(row.group).first ?? "en"
+        if row.group.hasSuffix(".stringsdict") {
+            // The selected row may be NSStringLocalizedFormatKey metadata;
+            // derive the plural variable from a real sibling leaf instead.
+            let sibling = snapshot?.rows.first {
+                $0.group == row.group && $0.key == row.key && $0.variant.hasSuffix("/other")
+            }
+            let leaf = sibling?.variant ?? row.variant
+            let variable = leaf.contains("/") ? String(leaf.split(separator: "/").first ?? "count") : "count"
+            inputVariant = variable + "/one"
+        } else {
+            inputVariant = "variations/plural/one"
+        }
+        inputValue = ""
+        formError = nil
+        showVariantSheet = true
+    }
+    func prepareComment() {
+        formError = nil
+        showCommentSheet = true
+    }
+    func didDismissForm() {
+        guard showOperationsWhenFormCloses else { return }
+        showOperationsWhenFormCloses = false
+        showOperations = true
+    }
+    func reviewFromOperations() {
+        reviewWhenOperationsCloses = true
+        showOperations = false
+    }
+    func didDismissOperations() {
+        guard reviewWhenOperationsCloses else { return }
+        reviewWhenOperationsCloses = false
+        review()
+    }
+    private func stageFromForm(_ edit: WorkspaceEdit) {
+        stage(edit)
+        formError = nil
+        // Present the operations sheet only after the current sheet has dismissed.
+        showOperationsWhenFormCloses = true
+    }
+    private func effectiveKey(group: String, key original: String) -> String {
+        var key = original
+        for edit in staged {
+            if case let .renameKey(g, old, new) = edit, g == group, old == key {
+                key = new
+            }
+        }
+        return key
+    }
+    private func keyExistsOrIsStaged(group: String, key: String) -> Bool {
+        if snapshot?.rows.contains(where: { $0.group == group && $0.key == key }) == true {
+            return true
+        }
+        return staged.contains { edit in
+            switch edit {
+            case let .addKey(g, k), let .addPlural(g, k, _, _):
+                return g == group && k == key
+            case let .renameKey(g, _, new):
+                return g == group && new == key
+            default:
+                return false
+            }
+        }
     }
     func stageDrafts() {
         guard let snap = snapshot else { return }
@@ -240,57 +403,125 @@ final class WorkbenchStore: ObservableObject {
     func undo() {
         guard let last = staged.popLast() else { return }
         redoStack.append(last)
+        stagedNotice = staged.isEmpty ? nil : "\(staged.count) operations remain staged"
     }
     func redo() {
         guard let last = redoStack.popLast() else { return }
         staged.append(last)
+        stagedNotice = "Restaged: \(last.summary)"
     }
     func discard() {
         for cell in cellDrafts.values where cell.isDirty { cell.text = cell.original }
         drafts.removeAll()
         dirtyDraftCount = 0
         staged = []; redoStack = []; changes = nil
+        stagedNotice = nil
     }
     func addKey() {
-        guard let group = selectedGroup, !inputKey.isEmpty else { return }
-        if group.hasSuffix(".stringsdict") {
-            stage(.addPlural(group: group, key: inputKey, variable: inputPluralVariable, valueType: inputPluralType))
-        } else {
-            stage(.addKey(group: group, key: inputKey))
+        guard let group = selectedGroup else {
+            formError = "Select a resource in the sidebar before adding a key."
+            return
         }
-        showAddKeySheet = false; inputKey = ""
+        let key = inputKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { formError = "Enter a non-empty key."; return }
+        guard !keyExistsOrIsStaged(group: group, key: key) else {
+            formError = "The key already exists or is staged in this resource."
+            return
+        }
+        if group.hasSuffix(".stringsdict") {
+            let variable = inputPluralVariable.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard variable.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil else {
+                formError = "Use a valid plural variable, for example count."
+                return
+            }
+            stageFromForm(.addPlural(group: group, key: key, variable: variable, valueType: inputPluralType))
+        } else {
+            stageFromForm(.addKey(group: group, key: key))
+        }
+        showAddKeySheet = false
+        inputKey = ""
     }
     func renameKey() {
-        guard let row = selectedRow, !inputRename.isEmpty else { return }
-        stage(.renameKey(group: row.group, old: row.key, new: inputRename))
-        showRenameSheet = false; inputRename = ""
+        guard let row = selectedRow else { formError = "Select a translation row first."; return }
+        let newKey = inputRename.trimmingCharacters(in: .whitespacesAndNewlines)
+        let oldKey = effectiveKey(group: row.group, key: row.key)
+        guard !newKey.isEmpty, newKey != oldKey else {
+            formError = "Enter a different, non-empty key."
+            return
+        }
+        guard !keyExistsOrIsStaged(group: row.group, key: newKey) else {
+            formError = "The new key already exists or is staged in this resource."
+            return
+        }
+        stageFromForm(.renameKey(group: row.group, old: oldKey, new: newKey))
+        showRenameSheet = false
+        inputRename = ""
     }
     func deleteKey() {
         guard let row = selectedRow else { return }
-        stage(.deleteKey(group: row.group, key: row.key))
+        stage(.deleteKey(group: row.group, key: effectiveKey(group: row.group, key: row.key)))
         showDeleteConfirmation = false
     }
     func addLanguage() {
-        guard let group = selectedGroup, !inputLanguage.isEmpty else { return }
-        stage(.addLanguage(group: group, language: inputLanguage))
+        guard let group = selectedGroup else { formError = "Select a resource first."; return }
+        guard selectableLanguages.contains(where: { $0.id == inputLanguage }) else {
+            formError = "Choose a language not already present in this resource."
+            return
+        }
+        let language = (inputLanguage == "__custom__" ? customLanguage : inputLanguage)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard language.range(of: #"^[A-Za-z]{2,3}([_-][A-Za-z0-9]{2,8})*$"#, options: .regularExpression) != nil else {
+            formError = "Enter a valid BCP 47 identifier, such as sr-Latn or fr-CA."
+            return
+        }
+        let alreadyStaged = staged.contains { edit in
+            if case let .addLanguage(g, locale) = edit { return g == group && locale == language }
+            return false
+        }
+        guard !langs(group).contains(language), !alreadyStaged else {
+            formError = "This language already exists or is staged in the resource."
+            return
+        }
+        stageFromForm(.addLanguage(group: group, language: language))
         showAddLanguageSheet = false
     }
     func addVariant() {
-        guard let row = selectedRow, !inputVariant.isEmpty, !inputLanguage.isEmpty else { return }
-        stage(.set(group: row.group, key: row.key, variant: inputVariant, language: inputLanguage, value: inputValue))
+        guard let row = selectedRow else { formError = "Select a translation row first."; return }
+        guard row.group.hasSuffix(".xcstrings") || row.group.hasSuffix(".stringsdict") else {
+            formError = "Variants are supported only for .xcstrings and .stringsdict."
+            return
+        }
+        let variant = inputVariant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let language = inputLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !variant.isEmpty, !language.isEmpty else {
+            formError = "Provide both a language and a variant path."
+            return
+        }
+        stageFromForm(.set(group: row.group, key: effectiveKey(group: row.group, key: row.key),
+                           variant: variant, language: language, value: inputValue))
         showVariantSheet = false
     }
     func addComment() {
-        guard let row = selectedRow else { return }
-        stage(.comment(group: row.group, key: row.key, text: inputComment))
+        guard let row = selectedRow else { formError = "Select a translation row first."; return }
+        guard !row.group.hasSuffix(".stringsdict") else {
+            formError = ".stringsdict comments are not supported."
+            return
+        }
+        stageFromForm(.comment(group: row.group, key: effectiveKey(group: row.group, key: row.key), text: inputComment))
         showCommentSheet = false
     }
     func review() {
         stageDrafts()
         guard let snapshot else { return }
         guard !staged.isEmpty else { message = "No changes to save"; return }
-        do { changes = try WorkspaceTransactions.preview(snapshot: snapshot, edits: staged) }
-        catch { message = error.localizedDescription }
+        do {
+            let preview = try WorkspaceTransactions.preview(snapshot: snapshot, edits: staged)
+            guard !preview.files.isEmpty else {
+                message = "The staged operations produce no file changes."
+                return
+            }
+            changes = preview
+        } catch { message = error.localizedDescription }
     }
     func commit() {
         guard let set = changes else { return }
@@ -390,12 +621,12 @@ private struct WorkbenchWindow: View {
             Button("OK", role: .cancel) { store.message = nil }
         } message: { Text(store.message ?? "") }
         .sheet(isPresented: $store.showIssues) { diagnosticsSheet }
-        .sheet(isPresented: $store.showOperations) { operationsSheet }
-        .sheet(isPresented: $store.showAddKeySheet) { addKeySheet }
-        .sheet(isPresented: $store.showRenameSheet) { renameSheet }
-        .sheet(isPresented: $store.showAddLanguageSheet) { addLanguageSheet }
-        .sheet(isPresented: $store.showVariantSheet) { variantSheet }
-        .sheet(isPresented: $store.showCommentSheet) { commentSheet }
+        .sheet(isPresented: $store.showOperations, onDismiss: { store.didDismissOperations() }) { operationsSheet }
+        .sheet(isPresented: $store.showAddKeySheet, onDismiss: { store.didDismissForm() }) { addKeySheet }
+        .sheet(isPresented: $store.showRenameSheet, onDismiss: { store.didDismissForm() }) { renameSheet }
+        .sheet(isPresented: $store.showAddLanguageSheet, onDismiss: { store.didDismissForm() }) { addLanguageSheet }
+        .sheet(isPresented: $store.showVariantSheet, onDismiss: { store.didDismissForm() }) { variantSheet }
+        .sheet(isPresented: $store.showCommentSheet, onDismiss: { store.didDismissForm() }) { commentSheet }
         .sheet(isPresented: Binding(get: { store.changes != nil }, set: { if !$0 { store.changes = nil } })) { changeReview }
         .confirmationDialog("Delete this key from all translations in this resource?", isPresented: $store.showDeleteConfirmation) {
             Button("Stage Key Deletion", role: .destructive) { store.deleteKey() }
@@ -495,10 +726,10 @@ private struct WorkbenchWindow: View {
             }
             .frame(minWidth: 150, maxWidth: 260, alignment: .leading)
             Spacer(minLength: 2)
-            Button { store.showAddKeySheet = true } label: { Label("Key", systemImage: "plus") }
+            Button { store.prepareAddKey() } label: { Label("Key", systemImage: "plus") }
                 .disabled(store.selectedGroup == nil)
                 .help("Add a key to selected resource")
-            Button { store.showAddLanguageSheet = true } label: { Label("Language", systemImage: "globe.badge.chevron.backward") }
+            Button { store.prepareAddLanguage() } label: { Label("Language", systemImage: "globe.badge.chevron.backward") }
                 .disabled(store.selectedGroup == nil)
             Button { store.importCSV() } label: { Image(systemName: "square.and.arrow.down") }.help("Import CSV")
             Button { store.exportCSV() } label: { Image(systemName: "square.and.arrow.up") }.help("Export CSV")
@@ -594,16 +825,9 @@ private struct WorkbenchWindow: View {
                                         NSPasteboard.general.clearContents()
                                         NSPasteboard.general.setString(row.key, forType: .string)
                                     }
-                                    Button("Rename Key…") {
-                                        store.selectedRowID = row.id
-                                        store.inputRename = row.key
-                                        store.showRenameSheet = true
-                                    }
-                                    Button("Add Variant…") {
-                                        store.selectedRowID = row.id
-                                        store.inputLanguage = languages.first ?? "en"
-                                        store.showVariantSheet = true
-                                    }
+                                    Button("Rename Key…") { store.prepareRename(row) }
+                                    Button("Add Variant…") { store.prepareVariant(row) }
+                                        .disabled(row.group.hasSuffix(".strings"))
                                     Divider()
                                     Button("Delete Key…", role: .destructive) {
                                         store.selectedRowID = row.id
@@ -676,9 +900,11 @@ private struct WorkbenchWindow: View {
                 }
                 Divider()
                 HStack(spacing: 6) {
-                    Button("Rename") { store.inputRename = row.key; store.showRenameSheet = true }
-                    Button("Variant") { store.inputLanguage = store.langs(row.group).first ?? "en"; store.showVariantSheet = true }
-                    Button("Comment") { store.showCommentSheet = true }
+                    Button("Rename") { store.prepareRename(row) }
+                    Button("Variant") { store.prepareVariant(row) }
+                        .disabled(row.group.hasSuffix(".strings"))
+                    Button("Comment") { store.prepareComment() }
+                        .disabled(row.group.hasSuffix(".stringsdict"))
                 }.controlSize(.small)
                 Button(role: .destructive) { store.showDeleteConfirmation = true } label: {
                     Label("Delete key across locales", systemImage: "trash")
@@ -706,6 +932,9 @@ private struct WorkbenchWindow: View {
             Text("\(store.snapshot?.languages.count ?? 0) languages")
             Text("\(store.unsavedDraftCount) edited cells")
             Text("\(store.staged.count) staged operations")
+            if let notice = store.stagedNotice {
+                Text(notice).foregroundStyle(.green).lineLimit(1).help(notice)
+            }
             Spacer()
             Button("Stage edits") { store.stageDrafts() }.buttonStyle(.link).disabled(store.unsavedDraftCount == 0)
             Button("Discard") { store.discard() }.buttonStyle(.link).disabled(store.staged.isEmpty && store.unsavedDraftCount == 0)
@@ -764,7 +993,7 @@ private struct WorkbenchWindow: View {
                     Text("\(index + 1).").foregroundStyle(.secondary).font(.caption.monospacedDigit())
                     Text(edit.summary).textSelection(.enabled)
                     Spacer()
-                    Button { store.staged.remove(at: index) } label: { Image(systemName: "xmark.circle") }
+                    Button { store.removeStaged(at: index) } label: { Image(systemName: "xmark.circle") }
                         .buttonStyle(.borderless)
                 }
             }
@@ -774,7 +1003,7 @@ private struct WorkbenchWindow: View {
                 Button("Discard All", role: .destructive) { store.discard() }
                 Spacer()
                 Button("Close") { store.showOperations = false }
-                Button("Review & Save") { store.showOperations = false; store.review() }
+                Button("Review & Save") { store.reviewFromOperations() }
                     .buttonStyle(.borderedProminent)
             }
         }.padding(20).frame(width: 670, height: 410)
@@ -799,8 +1028,17 @@ private struct WorkbenchWindow: View {
         } action: { store.renameKey() }
     }
     private var addLanguageSheet: some View {
-        formSheet("Add Language", hint: "Use a BCP 47 identifier such as fr, es, zh-Hans or pt-BR. Xcode project membership for new .lproj files must be configured separately.") {
-            TextField("Language identifier", text: $store.inputLanguage)
+        formSheet("Add Language", hint: "Choose a language for the selected resource. Xcode project membership for new .lproj files must be configured separately.") {
+            Picker("Language", selection: $store.inputLanguage) {
+                ForEach(store.selectableLanguages) { choice in
+                    Text("\(choice.name) (\(choice.id))").tag(choice.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if store.inputLanguage == "__custom__" {
+                TextField("BCP 47 identifier (e.g. sr-Latn)", text: $store.customLanguage)
+            }
         } action: { store.addLanguage() }
     }
     private var variantSheet: some View {
@@ -820,6 +1058,11 @@ private struct WorkbenchWindow: View {
             Text(title).font(.title2.bold())
             Text(hint).font(.callout).foregroundStyle(.secondary)
             fields()
+            if let error = store.formError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             HStack {
                 Spacer()

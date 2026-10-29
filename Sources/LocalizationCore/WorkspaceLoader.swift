@@ -3,12 +3,13 @@ import Foundation
 public enum WorkspaceLoader {
     /// Scans a workspace without altering any file or Xcode project metadata.
     public static func load(at chosenURL: URL) throws -> WorkspaceSnapshot {
-        let root = (["xcodeproj", "xcworkspace"].contains(chosenURL.pathExtension)) ? chosenURL.deletingLastPathComponent() : chosenURL
+        let selectedRoot = (["xcodeproj", "xcworkspace"].contains(chosenURL.pathExtension)) ? chosenURL.deletingLastPathComponent() : chosenURL
+        let root = selectedRoot.standardizedFileURL.resolvingSymlinksInPath()
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
             throw LocalizationFailure.missing("Open an existing directory or Xcode project")
         }
-        let rootComponents = root.standardizedFileURL.pathComponents
+        let rootComponents = root.pathComponents
         let ignored = Set([".git", ".build", "Pods", "Carthage", "DerivedData", "build", ".swiftpm", "node_modules", ".localization-workbench-backups"])
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             throw LocalizationFailure.missing("Unable to read workspace directory")
@@ -21,7 +22,11 @@ public enum WorkspaceLoader {
         var groupLanguages: [String: Set<String>] = [:]
         var catalogSource: [String: String] = [:]
 
-        for case let url as URL in enumerator {
+        for case let enumeratedURL as URL in enumerator {
+            let url = enumeratedURL.standardizedFileURL.resolvingSymlinksInPath()
+            // A workspace may be opened through a symlink. Resolve it once
+            // and reject files whose symlinks point outside that workspace.
+            guard url.pathComponents.starts(with: rootComponents) else { continue }
             let name = url.lastPathComponent
             if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
                 if ignored.contains(name) || name.hasSuffix(".framework") || name.hasSuffix(".xcodeproj") || name.hasSuffix(".xcworkspace") {
@@ -30,7 +35,7 @@ public enum WorkspaceLoader {
                 continue
             }
             guard let type = LocalizationFormat(rawValue: url.pathExtension) else { continue }
-            let relativeParts = Array(url.standardizedFileURL.pathComponents.dropFirst(rootComponents.count))
+            let relativeParts = Array(url.pathComponents.dropFirst(rootComponents.count))
             guard !relativeParts.isEmpty else { continue }
             let localeIndex = relativeParts.lastIndex(where: { $0.hasSuffix(".lproj") })
             let locale = localeIndex.map { String(relativeParts[$0].dropLast(6)) }
@@ -180,10 +185,6 @@ public enum WorkspaceLoader {
     }
 
     private static func formatPlaceholders(_ s: String) -> [String] {
-        // All printf placeholders except escaped percent; preserve positional indices and types.
-        let pattern = #"%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let r = NSRange(s.startIndex..<s.endIndex, in: s)
-        return regex.matches(in: s, range: r).compactMap { Range($0.range, in: s).map { String(s[$0]) } }.sorted()
+        PrintfPlaceholders.signatures(s)
     }
 }

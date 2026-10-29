@@ -82,23 +82,47 @@ public enum WorkspaceDiagnostics {
     public static func summary(_ snapshot: WorkspaceSnapshot, group: String? = nil) -> (total: Int, missing: Int, warnings: Int, errors: Int) {
         let rows = snapshot.rows.filter { group == nil || $0.group == group }
         let issues = snapshot.issues.filter { group == nil || $0.file == group }
+        var languagesByGroup: [String: Set<String>] = [:]
+        for doc in snapshot.documents {
+            if let language = doc.language {
+                languagesByGroup[doc.group, default: []].insert(language)
+            } else if doc.format == .xcstrings,
+                      let data = snapshot.baselineFiles[doc.url.path],
+                      let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let source = object["sourceLanguage"] as? String {
+                languagesByGroup[doc.group, default: []].insert(source)
+            }
+        }
+        for row in snapshot.rows {
+            languagesByGroup[row.group, default: []].formUnion(row.values.keys)
+        }
         let missing = rows.reduce(0) { sum, row in
-            // Only compare languages actually present in the same group.
-            let groupLocales = Set(snapshot.documents.filter { $0.group == row.group }.compactMap(\.language))
-            let langs = groupLocales.isEmpty ? Set(snapshot.languages) : groupLocales
-            return sum + langs.filter { (row.values[$0] ?? "").isEmpty }.count
+            let languages = languagesByGroup[row.group] ?? []
+            return sum + languages.filter { (row.values[$0] ?? "").isEmpty }.count
         }
         return (rows.count, missing, issues.filter { $0.severity == .warning }.count, issues.filter { $0.severity == .error }.count)
     }
 
     public static func checkFormat(_ source: String, target: String) -> Bool {
-        // Match printf token type and position; `%%` is not a placeholder.
-        let pattern = #"%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return true }
-        func spec(_ text: String) -> [String] {
-            regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-                .compactMap { Range($0.range, in: text).map { String(text[$0]) } }.sorted()
-        }
-        return spec(source) == spec(target)
+        PrintfPlaceholders.signatures(source) == PrintfPlaceholders.signatures(target)
+    }
+}
+
+
+/// Consume escaped %% pairs before matching format specifiers. A plain regex
+/// matching %d would incorrectly flag the second percent in %%d as a token.
+enum PrintfPlaceholders {
+    private static let expression = try? NSRegularExpression(
+        pattern: #"(?:%%)|(%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp])"#
+    )
+
+    static func signatures(_ text: String) -> [String] {
+        guard let expression else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            let tokenRange = match.range(at: 1)
+            guard tokenRange.location != NSNotFound, let swiftRange = Range(tokenRange, in: text) else { return nil }
+            return String(text[swiftRange])
+        }.sorted()
     }
 }

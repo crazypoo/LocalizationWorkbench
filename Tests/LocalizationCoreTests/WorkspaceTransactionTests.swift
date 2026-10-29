@@ -16,6 +16,68 @@ final class WorkspaceTransactionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try body(dir, WorkspaceLoader.load(at: dir))
     }
+    func testWorkspaceOpenedThroughSymlinkCanStageAndCommitNewLocale() throws {
+        let realRoot = try makeWorkspace()
+        let aliasRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Workbench-Alias-" + UUID().uuidString)
+        try FileManager.default.createSymbolicLink(at: aliasRoot, withDestinationURL: realRoot)
+        defer {
+            try? FileManager.default.removeItem(at: aliasRoot)
+            try? FileManager.default.removeItem(at: realRoot)
+        }
+        let snapshot = try WorkspaceLoader.load(at: aliasRoot)
+        let preview = try WorkspaceTransactions.preview(snapshot: snapshot, edits: [
+            .addLanguage(group: "Localizable.strings", language: "fr")
+        ])
+        try WorkspaceTransactions.commit(preview)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: realRoot.appendingPathComponent("fr.lproj/Localizable.strings").path))
+        let manifestRoot = realRoot.appendingPathComponent(".localization-workbench-backups")
+        let backups = try FileManager.default.contentsOfDirectory(at: manifestRoot, includingPropertiesForKeys: nil)
+        let manifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: backups[0].appendingPathComponent("manifest.json"))
+        ) as! [String: Any]
+        let records = manifest["files"] as! [[String: Any]]
+        XCTAssertEqual(records.first?["relativePath"] as? String, "fr.lproj/Localizable.strings")
+    }
+
+    func testAddKeyPreviewIsStagedUntilCommitAndAddsEveryLocale() throws {
+        try withWorkspace { root, snap in
+            let english = root.appendingPathComponent("en.lproj/Localizable.strings")
+            let chinese = root.appendingPathComponent("zh-Hans.lproj/Localizable.strings")
+            let originalEnglish = try Data(contentsOf: english)
+            let originalChinese = try Data(contentsOf: chinese)
+
+            let pending = WorkspaceEdit.addKey(group: "Localizable.strings", key: "new.action")
+            let preview = try WorkspaceTransactions.preview(snapshot: snap, edits: [pending])
+            XCTAssertEqual(preview.files.count, 2)
+            XCTAssertEqual(try Data(contentsOf: english), originalEnglish)
+            XCTAssertEqual(try Data(contentsOf: chinese), originalChinese)
+            XCTAssertTrue(preview.files.allSatisfy { $0.updatedText.contains("\"new.action\"") })
+
+            try WorkspaceTransactions.commit(preview)
+            let reloaded = try WorkspaceLoader.load(at: root)
+            XCTAssertEqual(reloaded.rows.first(where: { $0.key == "new.action" })?.values["en"], "")
+            XCTAssertEqual(reloaded.rows.first(where: { $0.key == "new.action" })?.values["zh-Hans"], "")
+        }
+    }
+
+    func testDuplicateKeyIsRejectedInsteadOfSilentlyCreatingAnOperation() throws {
+        try withWorkspace { _, snap in
+            XCTAssertThrowsError(try WorkspaceTransactions.preview(snapshot: snap, edits: [
+                .addKey(group: "Localizable.strings", key: "welcome")
+            ]))
+        }
+    }
+
+    func testStagedEditMatchesExactRowOnly() {
+        let edit = WorkspaceEdit.set(group: "Localizable.strings", key: "cart.item",
+                                     variant: "", language: "en", value: "Changed")
+        XCTAssertTrue(edit.affects(TranslationRow(group: "Localizable.strings", key: "cart.item")))
+        XCTAssertFalse(edit.affects(TranslationRow(group: "Localizable.strings", key: "item")))
+        XCTAssertFalse(edit.affects(TranslationRow(group: "Other.strings", key: "cart.item")))
+        XCTAssertFalse(edit.affects(TranslationRow(group: "Localizable.strings", key: "cart.item", variant: "plural/one")))
+    }
+
     func testStagedMultiFileEditsAndBackups() throws {
         try withWorkspace { root, snap in
             let edits: [WorkspaceEdit] = [
