@@ -82,11 +82,23 @@ public enum WorkspaceDiagnostics {
     public static func summary(_ snapshot: WorkspaceSnapshot, group: String? = nil) -> (total: Int, missing: Int, warnings: Int, errors: Int) {
         let rows = snapshot.rows.filter { group == nil || $0.group == group }
         let issues = snapshot.issues.filter { group == nil || $0.file == group }
+        var languagesByGroup: [String: Set<String>] = [:]
+        for doc in snapshot.documents {
+            if let language = doc.language {
+                languagesByGroup[doc.group, default: []].insert(language)
+            } else if doc.format == .xcstrings,
+                      let data = snapshot.baselineFiles[doc.url.path],
+                      let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let source = object["sourceLanguage"] as? String {
+                languagesByGroup[doc.group, default: []].insert(source)
+            }
+        }
+        for row in snapshot.rows {
+            languagesByGroup[row.group, default: []].formUnion(row.values.keys)
+        }
         let missing = rows.reduce(0) { sum, row in
-            // Only compare languages actually present in the same group.
-            let groupLocales = Set(snapshot.documents.filter { $0.group == row.group }.compactMap(\.language))
-            let langs = groupLocales.isEmpty ? Set(snapshot.languages) : groupLocales
-            return sum + langs.filter { (row.values[$0] ?? "").isEmpty }.count
+            let languages = languagesByGroup[row.group] ?? []
+            return sum + languages.filter { (row.values[$0] ?? "").isEmpty }.count
         }
         return (rows.count, missing, issues.filter { $0.severity == .warning }.count, issues.filter { $0.severity == .error }.count)
     }
