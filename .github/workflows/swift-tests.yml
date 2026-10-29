@@ -1,0 +1,34 @@
+name: Swift Package Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "fix/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Swift Core and CLI (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Test
+        run: swift test --parallel
+
+  macos:
+    name: SwiftUI App and Core (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Test and compile app
+        run: |
+          swift test --parallel
+          swift build --product LocalizationWorkbenchApp
