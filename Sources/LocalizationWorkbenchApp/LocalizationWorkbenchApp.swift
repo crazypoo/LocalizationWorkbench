@@ -65,6 +65,7 @@ final class WorkbenchStore: ObservableObject {
     @Published var formError: String?
     @Published var stagedNotice: String?
     private var showOperationsWhenFormCloses = false
+    private var reviewWhenOperationsCloses = false
 
     @Published var inputKey = ""
     @Published var inputPluralVariable = "count"
@@ -256,6 +257,7 @@ final class WorkbenchStore: ObservableObject {
                 selectedRowID = nil
                 staged = []
                 redoStack = []
+                stagedNotice = nil
                 changes = nil
                 UserDefaults.standard.set(url.path, forKey: "LastProjectPath")
             } catch { message = error.localizedDescription }
@@ -336,6 +338,15 @@ final class WorkbenchStore: ObservableObject {
         guard showOperationsWhenFormCloses else { return }
         showOperationsWhenFormCloses = false
         showOperations = true
+    }
+    func reviewFromOperations() {
+        reviewWhenOperationsCloses = true
+        showOperations = false
+    }
+    func didDismissOperations() {
+        guard reviewWhenOperationsCloses else { return }
+        reviewWhenOperationsCloses = false
+        review()
     }
     private func stageFromForm(_ edit: WorkspaceEdit) {
         stage(edit)
@@ -610,7 +621,7 @@ private struct WorkbenchWindow: View {
             Button("OK", role: .cancel) { store.message = nil }
         } message: { Text(store.message ?? "") }
         .sheet(isPresented: $store.showIssues) { diagnosticsSheet }
-        .sheet(isPresented: $store.showOperations) { operationsSheet }
+        .sheet(isPresented: $store.showOperations, onDismiss: { store.didDismissOperations() }) { operationsSheet }
         .sheet(isPresented: $store.showAddKeySheet, onDismiss: { store.didDismissForm() }) { addKeySheet }
         .sheet(isPresented: $store.showRenameSheet, onDismiss: { store.didDismissForm() }) { renameSheet }
         .sheet(isPresented: $store.showAddLanguageSheet, onDismiss: { store.didDismissForm() }) { addLanguageSheet }
@@ -992,7 +1003,7 @@ private struct WorkbenchWindow: View {
                 Button("Discard All", role: .destructive) { store.discard() }
                 Spacer()
                 Button("Close") { store.showOperations = false }
-                Button("Review & Save") { store.showOperations = false; store.review() }
+                Button("Review & Save") { store.reviewFromOperations() }
                     .buttonStyle(.borderedProminent)
             }
         }.padding(20).frame(width: 670, height: 410)
