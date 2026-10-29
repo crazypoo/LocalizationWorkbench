@@ -180,10 +180,6 @@ public enum WorkspaceLoader {
     }
 
     private static func formatPlaceholders(_ s: String) -> [String] {
-        // All printf placeholders except escaped percent; preserve positional indices and types.
-        let pattern = #"%(?:[1-9]\d*\$)?[-+# 0']*\d*(?:\.\d+)?(?:hh|ll|h|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let r = NSRange(s.startIndex..<s.endIndex, in: s)
-        return regex.matches(in: s, range: r).compactMap { Range($0.range, in: s).map { String(s[$0]) } }.sorted()
+        PrintfPlaceholders.signatures(s)
     }
 }
