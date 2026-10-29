@@ -3,6 +3,19 @@ import Foundation
 @testable import LocalizationCore
 
 final class LocalizationCoreTests: XCTestCase {
+    func testCatalogSummaryDoesNotCountLanguagesFromUnrelatedResources() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Locale-Summary-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("es.lproj"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"{"version":"1.1","sourceLanguage":"en","strings":{"Hello":{}}}"#.utf8)
+            .write(to: root.appendingPathComponent("App.xcstrings"))
+        try Data(#""other" = "otro";"#.utf8)
+            .write(to: root.appendingPathComponent("es.lproj/Other.strings"))
+        let snapshot = try WorkspaceLoader.load(at: root)
+        XCTAssertEqual(WorkspaceDiagnostics.summary(snapshot, group: "App.xcstrings").missing, 0)
+        XCTAssertEqual(WorkspaceDiagnostics.summary(snapshot, group: "Other.strings").missing, 0)
+    }
+
     func testEscapedPrintfPercentsDoNotCountAsPlaceholders() {
         XCTAssertTrue(WorkspaceDiagnostics.checkFormat("Progress %%d", "Avancement %%d"))
         XCTAssertFalse(WorkspaceDiagnostics.checkFormat("%%d", "%d"))
