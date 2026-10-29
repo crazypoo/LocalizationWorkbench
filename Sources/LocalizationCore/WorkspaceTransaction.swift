@@ -22,6 +22,22 @@ public enum WorkspaceEdit: Hashable, Sendable {
         case let .comment(g,k,_): return "Comment \(k) · \(g)"
         }
     }
+
+    /// Match typed fields instead of searching human-facing summaries, so a
+    /// staged edit to "cart.item" never marks "item" as modified.
+    public func affects(_ row: TranslationRow) -> Bool {
+        switch self {
+        case let .set(g, k, variant, _, _):
+            return row.group == g && row.key == k && row.variant == variant
+        case let .addKey(g, k), let .addPlural(g, k, _, _),
+             let .deleteKey(g, k), let .comment(g, k, _):
+            return row.group == g && row.key == k
+        case let .renameKey(g, old, new):
+            return row.group == g && (row.key == old || row.key == new)
+        case let .addLanguage(g, _):
+            return row.group == g
+        }
+    }
 }
 
 public struct FileDelta: Sendable, Identifiable {
